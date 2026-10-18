@@ -77,6 +77,33 @@ static ABI int32_t addon_list(uint32_t service,void *list,uint32_t capacity,uint
     if (hits) *hits=0;
     ++lists; return 0;
 }
+/* No add-on is owned: no entitlement key to give. */
+static ABI int32_t entitlement_key(uint32_t service,const void *label,void *key) {
+    require_initialized();
+    (void)service;
+    if (!label || !key) return PARAMETER;
+    return (int32_t)0x80d90007; /* DRM_NO_ENTITLEMENT */
+}
+/* Temporary data is /temp0, a writable mount in the user directory (runtime_file.c). Formatting
+ * keeps its files: nothing is deleted from the player's disk on the game's request. */
+static ABI int32_t temp_mount(uint32_t option,char *mount_point) {
+    require_initialized();
+    if (!mount_point) return PARAMETER;
+    memset(mount_point,0,16);
+    strcpy(mount_point,"/temp0");
+    printf("Runtime: AppContent temporary data mounted at /temp0 (option %u)\n",option);
+    return 0;
+}
+static ABI int32_t temp_format(const char *mount_point) {
+    require_initialized();
+    return mount_point ? 0 : PARAMETER;
+}
+static ABI int32_t temp_space(const char *mount_point,uint64_t *kib) {
+    require_initialized();
+    if (!mount_point || !kib) return PARAMETER;
+    *kib=UINT64_C(1048576); /* 1 GiB */
+    return 0;
+}
 uintptr_t runtime_content_resolve(const char *name) {
     if (!strcmp(name,"g8cM39EUZ6o#libSceSysmodule")) return (uintptr_t)module_load;
     if (!strcmp(name,"fMP5NHUOaMk#libSceSysmodule")) return (uintptr_t)module_loaded;
@@ -84,6 +111,10 @@ uintptr_t runtime_content_resolve(const char *name) {
     if (!strcmp(name,"R9lA82OraNs#libSceAppContent")) return (uintptr_t)content_init;
     if (!strcmp(name,"99b82IKXpH4#libSceAppContent")) return (uintptr_t)param_int;
     if (!strcmp(name,"xnd8BJzAxmk#libSceAppContent")) return (uintptr_t)addon_list;
+    if (!strcmp(name,"XTWR0UXvcgs#libSceAppContent")) return (uintptr_t)entitlement_key;
+    if (!strcmp(name,"buYbeLOGWmA#libSceAppContent")) return (uintptr_t)temp_mount;
+    if (!strcmp(name,"a5N7lAG0y2Q#libSceAppContent")) return (uintptr_t)temp_format;
+    if (!strcmp(name,"SaKib2Ug0yI#libSceAppContent")) return (uintptr_t)temp_space;
     return 0;
 }
 void runtime_content_report(void) {

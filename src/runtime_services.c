@@ -186,7 +186,8 @@ static ABI int32_t voice_info(uint32_t port,uint32_t *info) {
 /* ---- Common dialogs: nothing is displayed; an opened dialog finishes. ---- */
 typedef struct { const char *name; int initialized, status; uint32_t button; } Dialog;
 static Dialog dialogs[]={{"CommonDialog",0,0,0},{"MsgDialog",0,0,0},{"SaveDataDialog",0,0,0},
-                         {"NpProfileDialog",0,0,0},{"NpCommerceDialog",0,0,0},{"ImeDialog",0,0,0}};
+                         {"NpProfileDialog",0,0,0},{"NpCommerceDialog",0,0,0},{"ImeDialog",0,0,0},
+                         {"ErrorDialog",0,0,0}};
 #define DIALOG_RUNNING 2
 #define DIALOG_FINISHED 3
 #define DIALOG_NOT_FINISHED ((int32_t)0x80B80005)
@@ -236,7 +237,7 @@ static int32_t dialog_term(int i) {
     static ABI int32_t tag##_open(const void *p) { (void)p; return dialog_open(i); } \
     static ABI int32_t tag##_status(void) { return dialog_status(i); } \
     static ABI int32_t tag##_term(void) { return dialog_term(i); }
-DIALOG(profile,3) DIALOG(commerce,4)
+DIALOG(profile,3) DIALOG(commerce,4) DIALOG(error_dialog,6)
 /* OrbisMsgDialogParam: BaseParam (48 bytes), size, mode (2 = progress bar).
  * OrbisSaveDataDialogParam: BaseParam, int32 size, mode (5 = progress bar). */
 static int32_t dialog_open_mode(int i, const unsigned char *param, size_t mode_offset, uint32_t progress_mode) {
@@ -543,6 +544,86 @@ static ABI int32_t mouse_read(int32_t handle,unsigned char *data,int32_t count) 
 static ABI int32_t mouse_close(int32_t handle) { (void)handle; return 0; }
 static ABI int32_t audio_in_open(void) { return AUDIO_IN_NOT_OPENED; }
 
+/* ---- Absent services LittleBigPlanet 3 also asks for ----
+ * Each says once in the log that the game used it. SERVICE_ABSENT is a failure status for
+ * libraries whose own error codes are not known here; the game only tests its sign. */
+#define SERVICE_ABSENT ((int32_t)0x80000001)
+#define CAMERA_NOT_OPEN ((int32_t)0x802E0004)
+#define CAMERA_NOT_CONNECTED ((int32_t)0x802E0010)
+#define MOVE_NO_CONTROLLER 1 /* a positive status on the console too */
+#define HTTP_INVALID_VALUE ((int32_t)0x80431077)
+#define ONCE(what) do { static int said_; if (!said_) { said_=1; note(what); } } while (0)
+#define ABSENT(fn,value,what) static ABI int32_t fn(void) { ONCE(what); return value; }
+ABSENT(camera_attached,0,"Camera: no PlayStation Camera attached")
+ABSENT(camera_open,CAMERA_NOT_CONNECTED,"Camera: open refused (not connected)")
+ABSENT(camera_closed,CAMERA_NOT_OPEN,"Camera: call on a camera that was never opened")
+ABSENT(move_init,0,"Move: library ready, no controllers")
+ABSENT(move_close,0,"Move: handle closed")
+static ABI int32_t move_open(int32_t user,int32_t type,int32_t index) {
+    (void)user; (void)type; (void)index;
+    ONCE("Move: handle opened, no controller behind it");
+    return new_id();
+}
+ABSENT(move_device_info,MOVE_NO_CONTROLLER,"Move: device info asked, no controller connected")
+static ABI int32_t move_read_recent(int32_t handle,int64_t time,void *data,int32_t *count) {
+    (void)handle; (void)time; (void)data;
+    ONCE("Move: state read, no controller connected");
+    if (count) *count=0;
+    return MOVE_NO_CONTROLLER;
+}
+ABSENT(move_tracker_absent,SERVICE_ABSENT,"MoveTracker: unavailable (no camera)")
+ABSENT(move_tracker_term,0,"MoveTracker: terminated")
+ABSENT(live_ok,0,"GameLiveStreaming: accepted, never broadcasting")
+ABSENT(live_absent,SERVICE_ABSENT,"GameLiveStreaming: no broadcast data")
+/* OrbisGameLiveStreamingStatus (72 bytes): not on air, no spectators. */
+static ABI int32_t live_status(unsigned char *status) {
+    ONCE("GameLiveStreaming: status asked (not on air)");
+    if (!status) return SERVICE_ABSENT;
+    memset(status,0,72); return 0;
+}
+ABSENT(companion_ok,0,"CompanionHttpd: accepted, no companion app will connect")
+ABSENT(content_search_ok,0,"ContentSearch: library ready, nothing to find")
+ABSENT(content_search_absent,SERVICE_ABSENT,"ContentSearch: query refused (no content database)")
+ABSENT(jpeg_absent,SERVICE_ABSENT,"JpegDec: no JPEG decoder yet")
+ABSENT(jpeg_delete,0,"JpegDec: decoder deleted")
+ABSENT(store_icon,0,"NpCommerce: PlayStation Store icon request ignored")
+ABSENT(np_extra_absent,NP_SIGNED_OUT,"NP: request refused (signed out)")
+static ABI int32_t np_extra_id(void) { ONCE("NP: local handle created (signed out)"); return new_id(); }
+ABSENT(http_extra_ok,0,"Http: setting accepted (no connection is ever made)")
+ABSENT(http_extra_fail,HTTP_NETWORK,"Http: response asked, none exists (offline)")
+static ABI int32_t http_object_logged(void) { ONCE("Http: connection/request object created (offline)"); return new_id(); }
+static ABI int32_t http_flag(int32_t id,int32_t *enabled) {
+    (void)id;
+    if (!enabled) return HTTP_INVALID_VALUE;
+    *enabled=0; return 0;
+}
+static ABI int32_t http_last_errno(int32_t request,int32_t *error) {
+    (void)request;
+    if (!error) return HTTP_INVALID_VALUE;
+    *error=51; return 0; /* ENETUNREACH */
+}
+/* POSIX sockets (libScePosix): -1 with ENETDOWN in the guest errno, as with no network. */
+static ABI int32_t posix_net_down(void) {
+    ONCE("POSIX sockets: refused (no network)");
+    *runtime_errno()=50;
+    return -1;
+}
+/* OrbisNpCommerceDialogResult: result (1 = canceled by the user), authorized (false). */
+static ABI int32_t commerce_result(unsigned char *out) {
+    if (dialogs[4].status!=DIALOG_FINISHED) return DIALOG_NOT_FINISHED;
+    if (!out) return DIALOG_ARG_NULL;
+    uint32_t canceled=1;
+    memcpy(out,&canceled,4); out[4]=0;
+    return 0;
+}
+/* PlayGo: nothing is left to install, so the to-do list is empty. */
+static ABI int32_t playgo_get_todo(int32_t handle,void *list,uint32_t count,uint32_t *entries) {
+    (void)list; (void)count;
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!entries) return PLAYGO_BAD_POINTER;
+    *entries=0; return 0;
+}
+
 
 static const RuntimeExport exports[]={
     {"sceUserServiceInitialize",user_initialize}, {"sceUserServiceTerminate",user_terminate},
@@ -668,5 +749,64 @@ static const RuntimeExport exports[]={
     {"sceAudioInOpen",audio_in_open},
     {"sceDiscMapIsRequestOnHDD",discmap_on_hdd}, {"sceDiscMap_8A828CAEE7EDD5E9",discmap_8a82},
     {"sceVoiceInit",ok_void}, {"sceVoiceEnd",ok_void},
+    /* LittleBigPlanet 3 */
+    {"sceCameraIsAttached",camera_attached}, {"sceCameraOpen",camera_open},
+    {"sceCameraClose",camera_closed}, {"sceCameraGetConfig",camera_closed},
+    {"sceCameraGetFrameData",camera_closed}, {"sceCameraSetAttribute",camera_closed},
+    {"sceCameraSetConfig",camera_closed}, {"sceCameraStart",camera_closed}, {"sceCameraStop",camera_closed},
+    {"sceMoveInit",move_init}, {"sceMoveOpen",move_open}, {"sceMoveClose",move_close},
+    {"sceMoveGetDeviceInfo",move_device_info}, {"sceMoveReadStateRecent",move_read_recent},
+    {"sceMoveTrackerGetWorkingMemorySize",move_tracker_absent}, {"sceMoveTrackerInit",move_tracker_absent},
+    {"sceMoveTrackerCameraUpdate",move_tracker_absent}, {"sceMoveTrackerControllersUpdate",move_tracker_absent},
+    {"sceMoveTrackerGetState",move_tracker_absent}, {"sceMoveTrackerTerm",move_tracker_term},
+    {"sceGameLiveStreamingInitialize",live_ok}, {"sceGameLiveStreamingTerminate",live_ok},
+    {"sceGameLiveStreamingEnableLiveStreaming",live_ok}, {"sceGameLiveStreamingClearSocialFeedbackMessages",live_ok},
+    {"sceGameLiveStreamingSetPresetSocialFeedbackCommands",live_ok},
+    {"sceGameLiveStreamingSetPresetSocialFeedbackCommandsDescription",live_ok},
+    {"sceGameLiveStreamingGetCurrentStatus",live_status},
+    {"sceGameLiveStreamingGetSocialFeedbackMessages",live_absent},
+    {"sceGameLiveStreamingGetSocialFeedbackMessagesCount",live_absent},
+    {"sceGameLiveStreamingGetProgramInfo",live_absent},
+    {"sceCompanionHttpdInitialize",companion_ok}, {"sceCompanionHttpdOptParamInitialize",companion_ok},
+    {"sceCompanionHttpdAddHeader",companion_ok}, {"sceCompanionHttpdRegisterRequestCallback",companion_ok},
+    {"sceCompanionHttpdSetStatus",companion_ok}, {"sceCompanionHttpdStart",companion_ok},
+    {"sceCompanionHttpdStop",companion_ok},
+    {"sceContentSearchInit",content_search_ok}, {"sceContentSearchTerm",content_search_ok},
+    {"sceContentSearchGetMyApplicationIndex",content_search_absent},
+    {"sceContentSearchSearchContent",content_search_absent},
+    {"sceContentSearchGetContentLastUpdateId",content_search_absent},
+    {"sceJpegDecQueryMemorySize",jpeg_absent}, {"sceJpegDecCreate",jpeg_absent},
+    {"sceJpegDecParseHeader",jpeg_absent}, {"sceJpegDecDecode",jpeg_absent}, {"sceJpegDecDelete",jpeg_delete},
+    {"sceErrorDialogInitialize",error_dialog_init}, {"sceErrorDialogOpen",error_dialog_open},
+    {"sceErrorDialogUpdateStatus",error_dialog_status}, {"sceErrorDialogTerminate",error_dialog_term},
+    {"sceNpCommerceDialogGetResult",commerce_result},
+    {"sceNpCommerceShowPsStoreIcon",store_icon}, {"sceNpCommerceHidePsStoreIcon",store_icon},
+    {"sceNpCreateRequest",np_extra_id}, {"sceNpAuthCreateRequest",np_extra_id},
+    {"sceNpGetAccountCountry",np_extra_absent},
+    {"sceNpInGameMessageInitialize",np_extra_id}, {"sceNpInGameMessageTerminate",ok_void},
+    {"sceNpInGameMessageCreateHandle",np_extra_id}, {"sceNpInGameMessageDeleteHandle",ok_void},
+    {"sceNpInGameMessagePrepare",np_extra_absent}, {"sceNpInGameMessageSendData",np_extra_absent},
+    {"sceNpWebApiCreateHandle",np_extra_id}, {"sceNpWebApiDeleteHandle",ok_void},
+    {"sceNpWebApiCreateServicePushEventFilter",np_extra_absent},
+    {"sceNpWebApiDeleteServicePushEventFilter",ok_void},
+    {"sceNpWebApiRegisterServicePushEventCallback",np_extra_absent}, {"sceNpWebApiGetErrorCode",np_extra_absent},
+    {"sceNpBandwidthTestInitStart",np_extra_absent}, {"sceNpBandwidthTestGetStatus",np_extra_absent},
+    {"sceNpBandwidthTestShutdown",ok_void}, {"sceNpLookupCreateRequest",np_extra_id},
+    {"sceNpSignalingGetConnectionInfo",np_extra_absent}, {"sceNpSignalingTerminateConnection",ok_void},
+    {"sceHttpCreateConnection",http_object_logged}, {"sceHttpCreateRequest",http_object_logged},
+    {"sceHttpAbortRequest",http_extra_ok}, {"sceHttpAddCookie",http_extra_ok}, {"sceHttpCookieFlush",http_extra_ok},
+    {"sceHttpRemoveRequestHeader",http_extra_ok}, {"sceHttpSetAuthEnabled",http_extra_ok},
+    {"sceHttpSetAutoRedirect",http_extra_ok}, {"sceHttpSetCookieEnabled",http_extra_ok},
+    {"sceHttpSetCookieRecvCallback",http_extra_ok}, {"sceHttpSetCookieSendCallback",http_extra_ok},
+    {"sceHttpSetRecvTimeOut",http_extra_ok}, {"sceHttpSetSendTimeOut",http_extra_ok},
+    {"sceHttpSetRedirectCallback",http_extra_ok}, {"sceHttpsLoadCert",http_extra_ok},
+    {"sceHttpsUnloadCert",http_extra_ok}, {"sceHttpsSetSslCallback",http_extra_ok},
+    {"sceHttpGetAuthEnabled",http_flag}, {"sceHttpGetAutoRedirect",http_flag}, {"sceHttpGetCookieEnabled",http_flag},
+    {"sceHttpGetLastErrno",http_last_errno},
+    {"sceHttpGetAllResponseHeaders",http_extra_fail}, {"sceHttpParseResponseHeader",http_extra_fail},
+    {"socket",posix_net_down}, {"bind",posix_net_down}, {"connect",posix_net_down},
+    {"send",posix_net_down}, {"sendto",posix_net_down}, {"recv",posix_net_down}, {"recvfrom",posix_net_down},
+    {"setsockopt",posix_net_down}, {"shutdown",posix_net_down},
+    {"scePlayGoGetToDoList",playgo_get_todo},
 };
 uintptr_t runtime_services_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "LittleBigPlanet 3",
+  "system": "PS4",
+  "type": "recomp",
+  "original": {
+    "region": "USA",
+    "revision": "01.00",
+    "serial": "CUSA00473",
+    "sha1": "5e0a1e8ff04d7e33d7dc0008c4d16c329f023169"
+  },
+  "project": "LittleBigPlanet 3 - PC",
+  "status": "in-progress",
+  "targets": [
+    "Windows"
+  ],
+  "toolchain": "Bbport",
+  "approach": "Native x86-64 execution of the PS4 executable, reimplemented system libraries, Vulkan renderer (shadPS4 video core)",
+  "maintainers": [
+    {
+      "name": "TheNIKITO",
+      "link": "https://github.com/TheNIKITO"
+    }
+  ],
+  "help": [
+    "Fibers (libSceFiber)",
+    "Loading the game's own modules (spu.prx, FMOD plugins)",
+    "FMOD audio"
+  ],
+  "tags": [
+    "ps4",
+    "vulkan",
+    "native-port",
+    "windows"
+  ],
+  "notes": "Executable: 98% (623 of 634 imported PS4 system functions answered by the port). Game: 25% (2 of 8 milestones: boots natively, engine initializes). Next: loading the game's own modules (spu.prx, FMOD plugins), libSceFiber, first frame. No release yet. Needs your own copy of the game; none is included. Fork of gow3_pc.",
+  "x-progress": {
+    "decompilation": "not applicable",
+    "executable": 98,
+    "game": 25
+  }
+}

@@ -189,7 +189,7 @@ def main():
     mod_patch_files = mods.enabled_patch_files(env.get('GOW3_MODS_DIR', data / 'mods'),
                                                env.get('GOW3_MODS_CONFIG', data / 'mods.json'),
                                                env.get('GOW3_MODS_ENABLED', '1') != '0',
-                                               env.get('GOW3_GAME_DIR', PORT.parent / 'CUSA01623'))
+                                               env.get('GOW3_GAME_DIR', PORT.parent / 'CUSA00473'))
     extra_resolutions = [s for s in patches.resolution_names(mod_patch_files) if s not in graphics_options.RESOLUTIONS]
     env['GOW3_EXTRA_RESOLUTIONS'] = ';'.join(extra_resolutions)
     derived.append('GOW3_EXTRA_RESOLUTIONS')
@@ -217,7 +217,7 @@ def main():
         sys.exit(20)
     missing = parse_cpu_features(features.stdout)
 
-    game = Path(env.get('GOW3_GAME_DIR', PORT.parent / 'CUSA01623'))
+    game = Path(env.get('GOW3_GAME_DIR', PORT.parent / 'CUSA00473'))
     if not (game / 'eboot.bin').is_file():
         fail(f'No eboot.bin in {game} (set GOW3_GAME_DIR).')
     update_view = None
@@ -312,11 +312,12 @@ def main():
         print(f'Engine frame rate: {min(int(graphics["engine_fps"]), engine_fps)} FPS, live up to {engine_fps}'
               + ('' if engine_fps > 60 or graphics['engine_fps'] == '60' else
                  ' (the frame rate patch was not found in this eboot.bin)'), flush=True)
-        glyph_args, glyph_style = glyph_mounts(env, probe, game, out)
+        # The button icons and the pause menu row are copies of God of War III's WADs: only for it.
+        glyph_args, glyph_style = glyph_mounts(env, probe, game, out) if profile else ([], None)
         if glyph_style:  # the in-game menu names the buttons the same way
             env['GOW3_GLYPHS'] = glyph_style
             derived.append('GOW3_GLYPHS')
-        mount_args = glyph_args + pause_menu_args(game, out, glyph_args)
+        mount_args = glyph_args + (pause_menu_args(game, out, glyph_args) if profile else [])
         env['GOW3_DERIVED'] = ','.join(derived)
         # The guest memory pool is committed in full at start: a resolution patch above 1080p
         # can need more than 16 GB of RAM, and the game then closes when the page file cannot grow.

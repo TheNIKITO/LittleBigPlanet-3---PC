@@ -1,0 +1,63 @@
+{
+  "measured": "2026-10-18",
+  "imports": {
+    "total": 634,
+    "answered": 623,
+    "missing": [
+      "libSceFiber: sceFiberRun",
+      "libSceFiber: sceFiberFinalize",
+      "libSceFiber: sceFiberOptParamInitialize",
+      "libSceFiber: _sceFiberInitializeImpl",
+      "libSceFiber: sceFiberReturnToThread",
+      "libkernel: sceKernelLoadStartModule",
+      "spu (módulo do próprio jogo)",
+      "FMODSmsWaveHammer (módulo do próprio jogo)",
+      "FMODSmsReverb (módulo do próprio jogo)",
+      "FMODExtInput (módulo do próprio jogo)",
+      "FMODVoIPMixer (módulo do próprio jogo)"
+    ]
+  },
+  "milestones": [
+    {
+      "pt": "O executável abre e roda nativamente",
+      "en": "boots natively",
+      "done": true
+    },
+    {
+      "pt": "O motor inicializa (threads, memória, leitura dos .farc)",
+      "en": "engine initializes",
+      "done": true
+    },
+    {
+      "pt": "Módulos próprios do jogo carregam (spu.prx, plugins FMOD)",
+      "en": "game modules load",
+      "done": false
+    },
+    {
+      "pt": "Primeiro frame na tela",
+      "en": "first frame",
+      "done": false
+    },
+    {
+      "pt": "Menu principal",
+      "en": "main menu",
+      "done": false
+    },
+    {
+      "pt": "Uma fase jogável",
+      "en": "a playable level",
+      "done": false
+    },
+    {
+      "pt": "Áudio (FMOD)",
+      "en": "audio",
+      "done": false
+    },
+    {
+      "pt": "Saves",
+      "en": "saves",
+      "done": false
+    }
+  ],
+  "next_en": "Next: loading the game's own modules (spu.prx, FMOD plugins), libSceFiber, first frame. No release yet. Needs your own copy of the game; none is included. Fork of gow3_pc."
+}

@@ -233,6 +233,13 @@ static ABI int32_t attr_affinity(ThreadAttr **slot,uint64_t *mask) {
     if (!a || !mask) return ERR(22);
     *mask=a->affinity; return 0;
 }
+/* The thread runs on a host stack of the requested size; the guest's own memory for it is
+ * left unused (Windows places thread stacks itself, see create). */
+static ABI int32_t attr_set_stack_address(ThreadAttr **slot,void *address,uint64_t size) {
+    ThreadAttr *a=find_attr(slot);
+    if (!a || !address || size<16384) return ERR(22);
+    a->stack=size; return 0;
+}
 static ABI int32_t attr_set_guard(ThreadAttr **slot,uint64_t size) {
     ThreadAttr *a=find_attr(slot);
     if (!a) return ERR(22);
@@ -334,6 +341,18 @@ static ABI int32_t thread_set_prio(GuestThread *t,int prio) {
     if (!find_thread(t)) return ERR(3);
     t->attr.prio=prio; return 0;
 }
+/* Scheduling policy and priority (SceKernelSchedParam: the priority alone) are recorded
+ * only: host threads run at equal priority. */
+static ABI int32_t thread_get_sched(GuestThread *t,int *policy,int *param) {
+    if (!find_thread(t)) return ERR(3);
+    if (!policy || !param) return ERR(22);
+    *policy=t->attr.policy; *param=t->attr.prio; return 0;
+}
+static ABI int32_t thread_set_sched(GuestThread *t,int policy,const int *param) {
+    if (!find_thread(t)) return ERR(3);
+    if (!param || policy<1 || policy>3) return ERR(22);
+    t->attr.policy=policy; t->attr.prio=*param; return 0;
+}
 static ABI int32_t thread_set_affinity(GuestThread *t,uint64_t mask) {
     if (!find_thread(t)) return ERR(3);
     t->attr.affinity=mask; return 0;
@@ -362,6 +381,7 @@ static ABI int32_t posix_attr_set_param(ThreadAttr **a,const int *p) { return po
 static ABI int32_t posix_create(GuestThread **t,ThreadAttr **a,GuestEntry e,void *arg) { return posix(create(t,a,e,arg,"posix")); }
 static ABI int32_t posix_create_name(GuestThread **t,ThreadAttr **a,GuestEntry e,void *arg,const char *name) { return posix(create(t,a,e,arg,name)); }
 static ABI int32_t posix_join(GuestThread *t,void **r) { return posix(thread_join(t,r)); }
+static ABI int32_t posix_set_sched(GuestThread *t,int policy,const int *param) { return posix(thread_set_sched(t,policy,param)); }
 
 uintptr_t runtime_thread_resolve(const char *name) {
     static const struct { const char *nid; void *fn; } table[]={
@@ -384,6 +404,9 @@ uintptr_t runtime_thread_resolve(const char *name) {
         {"euKRgm0Vn2M#libkernel",posix_attr_set_param}, {"OxhIB8LB-PQ#libkernel",posix_create},
         {"Jmi+9w9u0E4#libkernel",posix_create_name}, {"h9CcP3J0oVM#libkernel",posix_join},
         {"FJrT5LuUBAU#libkernel",thread_exit},
+        {"Bvn74vj6oLo#libkernel",attr_set_stack_address},
+        {"P41kTWUS3EI#libkernel",thread_get_sched}, {"oIRFTjoILbg#libkernel",thread_set_sched},
+        {"Xs9hdiD7sAA#libkernel",posix_set_sched},
     };
     for (size_t i=0;i<sizeof(table)/sizeof(*table);++i)
         if (!strcmp(name,table[i].nid)) return (uintptr_t)table[i].fn;

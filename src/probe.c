@@ -954,13 +954,17 @@ int main(int argc, char **argv) {
         printf("STOP: this CPU lacks %s and no rewrite table matches the image\n", missing);
         return 20;
     }
+    /* The God of War III hooks (cheats, multipliers, engine frame rate, menu row) patch that
+     * game's code: other titles never get them, even when a signature happened to match. */
+    int gow3_title=0;
     if (!cpu_only) {
-        char title[128]="God of War III", serial[16]="UNKNOWN", sfo[4096];
+        char title[128]="PS4 game", serial[16]="UNKNOWN", sfo[4096];
         uint32_t attributes=0;
         snprintf(sfo,sizeof(sfo),"%s/sce_sys/param.sfo",app0 ? app0 : ".");
         sfo_value(sfo,"TITLE",title,sizeof(title),NULL);
         sfo_value(sfo,"TITLE_ID",serial,sizeof(serial),NULL);
         sfo_value(sfo,"ATTRIBUTE",NULL,0,&attributes);
+        gow3_title=!strcmp(serial,"CUSA01623") || !strcmp(serial,"CUSA01715") || !strcmp(serial,"CUSA01720");
         uint64_t sdk=0;
         if (procparam) memcpy(&sdk,image+procparam+16,8); /* procparam: size, magic, count, sdk_version */
         Gow3GpuConfig gpu={title,serial,user_dir ? user_dir : "user",(uint32_t)sdk,attributes,1920,1080};
@@ -1015,13 +1019,15 @@ int main(int argc, char **argv) {
         _exit(missing ? 1 : 0); /* no destructors: GPU threads are running */
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
-    if (gpu_enabled) install_orb_multiplier(segments, ns, size);
-    if (gpu_enabled) install_cheats(segments, ns, size);
-    if (gpu_enabled) find_engine_fps(segments, ns, size);
-    if (gpu_enabled) install_actor_watch(segments, ns, size);
-    if (gpu_enabled) install_stat_multipliers(segments, ns, size);
-    if (gpu_enabled) install_qte_hooks(segments, ns, size);
-    if (gpu_enabled && pause_menu && app0) install_menu_exit(segments, ns, size, pause_menu);
+    if (gpu_enabled && gow3_title) {
+        install_orb_multiplier(segments, ns, size);
+        install_cheats(segments, ns, size);
+        find_engine_fps(segments, ns, size);
+        install_actor_watch(segments, ns, size);
+        install_stat_multipliers(segments, ns, size);
+        install_qte_hooks(segments, ns, size);
+        if (pause_menu && app0) install_menu_exit(segments, ns, size, pause_menu);
+    }
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif

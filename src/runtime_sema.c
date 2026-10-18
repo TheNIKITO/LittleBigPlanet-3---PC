@@ -159,6 +159,59 @@ static ABI int32_t sem_delete(uint32_t id) {
     pthread_mutex_unlock(&lock);
     return 0;
 }
+/* POSIX semaphores (libScePosix) on the kernel ones: sem_t holds the semaphore id tagged with
+ * a magic, so an uninitialized or destroyed sem_t is told apart. Failures return -1 and set
+ * the guest errno. */
+#define POSIX_SEM_MAGIC UINT64_C(0x504f534900000000)
+static int32_t posix_result(int32_t r) {
+    if (!r) return 0;
+    *runtime_errno()=(int32_t)((uint32_t)r&0xffff);
+    return -1;
+}
+static int posix_id(const uint64_t *sem,uint32_t *id) {
+    if (!sem || (*sem&UINT64_C(0xffffffff00000000))!=POSIX_SEM_MAGIC) return 0;
+    *id=(uint32_t)*sem; return 1;
+}
+static ABI int32_t posix_sem_init(uint64_t *sem,int shared,uint32_t value) {
+    (void)shared;
+    if (!sem || value>INT32_MAX) return posix_result(ERR(22));
+    uint32_t id;
+    int32_t r=sem_create(&id,"posix",1,(int32_t)value,INT32_MAX,NULL);
+    if (!r) *sem=POSIX_SEM_MAGIC|id;
+    return posix_result(r);
+}
+static ABI int32_t posix_sem_destroy(uint64_t *sem) {
+    uint32_t id;
+    if (!posix_id(sem,&id)) return posix_result(ERR(22));
+    int32_t r=sem_delete(id);
+    if (!r) *sem=0;
+    return posix_result(r);
+}
+static ABI int32_t posix_sem_post(uint64_t *sem) {
+    uint32_t id;
+    return posix_result(posix_id(sem,&id) ? sem_signal(id,1) : ERR(22));
+}
+static ABI int32_t posix_sem_wait(uint64_t *sem) {
+    uint32_t id;
+    return posix_result(posix_id(sem,&id) ? wait_count(id,1,NULL,1) : ERR(22));
+}
+static ABI int32_t posix_sem_trywait(uint64_t *sem) {
+    uint32_t id;
+    if (!posix_id(sem,&id)) return posix_result(ERR(22));
+    int32_t r=wait_count(id,1,NULL,0);
+    return posix_result(r==ERR(16) ? ERR(35) : r); /* EAGAIN */
+}
+/* abstime is CLOCK_REALTIME (struct timespec: 64-bit seconds and nanoseconds). */
+static ABI int32_t posix_sem_timedwait(uint64_t *sem,const int64_t *abstime) {
+    uint32_t id;
+    if (!posix_id(sem,&id)) return posix_result(ERR(22));
+    if (!abstime || abstime[1]<0 || abstime[1]>=1000000000) return posix_result(ERR(22));
+    struct timespec now;
+    if (clock_gettime(CLOCK_REALTIME,&now)) { perror("clock_gettime"); exit(1); }
+    int64_t left=(abstime[0]-(int64_t)now.tv_sec)*1000000000+(abstime[1]-(int64_t)now.tv_nsec);
+    uint32_t timeout=left<=0 ? 0 : (left+999)/1000>UINT32_MAX ? UINT32_MAX : (uint32_t)((left+999)/1000);
+    return posix_result(wait_count(id,1,&timeout,1));
+}
 /* Read-only test/diagnostic snapshot, not exposed to guest code. */
 unsigned runtime_sema_waiters(uint32_t id) {
     pthread_mutex_lock(&lock);
@@ -174,6 +227,12 @@ uintptr_t runtime_sema_resolve(const char *name) {
     if (!strcmp(name,"12wOHk8ywb0#libkernel")) return (uintptr_t)sem_poll;
     if (!strcmp(name,"4DM06U2BNEY#libkernel")) return (uintptr_t)sem_cancel;
     if (!strcmp(name,"R1Jvn8bSCW8#libkernel")) return (uintptr_t)sem_delete;
+    if (!strcmp(name,"pDuPEf3m4fI#libkernel")) return (uintptr_t)posix_sem_init;
+    if (!strcmp(name,"cDW233RAwWo#libkernel")) return (uintptr_t)posix_sem_destroy;
+    if (!strcmp(name,"IKP8typ0QUk#libkernel")) return (uintptr_t)posix_sem_post;
+    if (!strcmp(name,"YCV5dGGBcCo#libkernel")) return (uintptr_t)posix_sem_wait;
+    if (!strcmp(name,"WBWzsRifCEA#libkernel")) return (uintptr_t)posix_sem_trywait;
+    if (!strcmp(name,"w5IHyvahg-o#libkernel")) return (uintptr_t)posix_sem_timedwait;
     return 0;
 }
 void runtime_sema_report(void) {
