@@ -44,6 +44,12 @@ uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);
 uintptr_t runtime_evf_resolve(const char *name);
 void runtime_evf_report(void);
+/* A module linked into the image that the game starts itself (sceKernelLoadStartModule):
+ * its file name and initializer. */
+void runtime_module_add(const char *name, void *start);
+uintptr_t runtime_module_resolve(const char *name);
+uintptr_t runtime_fiber_resolve(const char *name);
+void runtime_fiber_report(void);
 unsigned runtime_sema_waiters(uint32_t id);
 uintptr_t runtime_time_resolve(const char *name);
 void runtime_content_configure(const uint32_t values[5]);

@@ -5,10 +5,16 @@ libSceFios2.prx). Every module is placed after the previous one; imports of
 all modules share one import table, so the C runtime can override any
 function (host contracts first) and otherwise binds the native export.
 
+The game's own modules (PRX files outside sce_module whose module name the
+eboot lists as a dependency, such as LittleBigPlanet 3's spu.prx and FMOD
+plugins) are linked too, marked to start when the game loads them
+(sceKernelLoadStartModule) rather than at boot.
+
 Exports are matched by (NID, library identity, module identity). Imports of
 libSceLibcInternal are served by libc.prx's same-NID exports: the internal
 library is not shipped with the game and exposes the same functions.
-Output: out/boot-linked.bin (format G3PROBE5) and out/link.json.
+Output: out/boot-linked.bin (format G3PROBE6: G3PROBE5 with each module's
+flags and file name) and out/link.json.
 """
 import collections
 import hashlib
@@ -20,6 +26,8 @@ from link_libc import encode_id
 
 DEFAULT_MODULES = ('libc.prx', 'libSceFios2.prx')
 FS_LOAD = bytes.fromhex('64488b042500000000')  # mov rax, fs:[0]
+MODULE_DEFERRED = 1  # G3PROBE6 module flag: started by the game's sceKernelLoadStartModule
+MAX_TLS_MODULE = 7   # the loader keeps TLS for module ids 2..7
 
 
 def canonical(identity, fallback=None):
@@ -45,8 +53,10 @@ def module(path):
     def string(offset):
         span(strings, offset, 1)
         return strings[offset:strings.index(0, offset)].decode('ascii')
-    libraries, modules = {}, {}
+    libraries, modules, own = {}, {}, None
     for tag, value in dynamic:
+        if tag == 0x6100000d:
+            own = string(value & 0xffffffff)
         if tag in (0x61000013, 0x61000015, 0x6100000d, 0x6100000f):
             table = libraries if tag in (0x61000013, 0x61000015) else modules
             key = encode_id(value >> 48)
@@ -75,7 +85,7 @@ def module(path):
             target, info, addend = unpack('<QQq', table, pos)
             relocations.append((target, info & 0xffffffff, info >> 32, addend))
     return dict(elf=elf, header=header, ph=ph, tags=tags, symbols=symbols, relocs=relocations,
-                identity=identity, libraries=libraries, modules=modules,
+                identity=identity, libraries=libraries, modules=modules, name=own,
                 sha256=hashlib.sha256(source).hexdigest(), missing=missing)
 
 
@@ -94,8 +104,30 @@ def patch_fs_loads(image, ph, base):
     return patched
 
 
-def link(game, out, module_names=DEFAULT_MODULES):
+def game_modules(game, main):
+    """The game's own modules the eboot depends on: PRX files of the game folder outside
+    sce_module and sce_sys whose module name the eboot lists as needed, as paths relative to
+    the game folder. Files that are not plaintext modules are skipped."""
+    needed = {name for name, version in main['modules'].values()}
+    found = []
+    for path in sorted(game.rglob('*.prx'), key=lambda p: p.as_posix().lower()):
+        relative = path.relative_to(game)
+        if relative.parts[0] in ('sce_module', 'sce_sys'):
+            continue
+        try:
+            name = module(path)['name']
+        except (OSError, ValueError, KeyError, StopIteration):
+            continue
+        if name in needed:
+            found.append(relative.as_posix())
+    return found
+
+
+def link(game, out, module_names=DEFAULT_MODULES, deferred=None):
     main = module(game / 'eboot.bin')
+    if deferred is None:
+        deferred = game_modules(game, main)
+    plan = [(f'sce_module/{name}', 0) for name in module_names] + [(path, MODULE_DEFERRED) for path in deferred]
     raw = (out / 'boot.bin').read_bytes()
     magic, size, entry, ns, nr, ni, flags = unpack('<8s6Q', raw, 0)
     if magic != b'G3PROBE2':
@@ -127,8 +159,11 @@ def link(game, out, module_names=DEFAULT_MODULES):
     base = (size + 65535) & ~65535
     fs_patched = patch_fs_loads(image, main['ph'], 0)
     tls_module = 2
-    for filename in module_names:
-        m = module(game / 'sce_module' / filename)
+    for relative, module_flags in plan:
+        filename = Path(relative).name
+        if len(filename.encode()) >= 64:
+            raise ValueError(f'{filename}: module file name too long')
+        m = module(game / relative)
         loads = [p for p in m['ph'] if p['type'] in (1, 0x61000010)]
         modsize = max(p['vaddr'] + p['memsz'] for p in loads)
         if base + modsize > 512 * 1024 * 1024:
@@ -142,13 +177,16 @@ def link(game, out, module_names=DEFAULT_MODULES):
                 raise ValueError(f'{filename}: invalid segment size')
             image[base + p['vaddr']:base + p['vaddr'] + p['filesz']] = span(m['elf'], p['offset'], p['filesz'])
             segments.append((base + p['vaddr'], p['memsz'], p['flags']))
-        tls = next((p for p in m['ph'] if p['type'] == 7), None)
+        # An empty TLS segment (FMOD plugins have one) needs no module id.
+        tls = next((p for p in m['ph'] if p['type'] == 7 and p['memsz']), None)
         module_id = 0
         if tls:
             if tls['filesz'] > tls['memsz'] or not mapped(tls['vaddr'], tls['memsz']):
                 raise ValueError(f'{filename}: unsupported TLS layout')
             module_id = tls_module
             tls_module += 1
+            if module_id > MAX_TLS_MODULE:
+                raise ValueError(f'{filename}: more modules with TLS than the loader supports')
         tls_relocations = 0
         for target, kind, symid, addend in m['relocs']:
             if not mapped(target):
@@ -190,7 +228,8 @@ def link(game, out, module_names=DEFAULT_MODULES):
                 by_nid[(s['identity'][0], s['identity'][1][0])].append(entry_value)
                 count += 1
         fs_patched += patch_fs_loads(image, m['ph'], base)
-        table.append(dict(file=filename, base=base, size=modsize, init=base + m['tags'].get(12, 0),
+        table.append(dict(file=filename, path=relative, flags=module_flags, base=base, size=modsize,
+                          init=base + m['tags'].get(12, 0),
                           tls_address=base + tls['vaddr'] if tls else 0, tls_memsz=tls['memsz'] if tls else 0,
                           tls_filesz=tls['filesz'] if tls else 0, tls_module=module_id,
                           tls_relocations=tls_relocations, exports=count, sha256=m['sha256']))
@@ -214,13 +253,14 @@ def link(game, out, module_names=DEFAULT_MODULES):
         raise ValueError('unsupported eboot TLS layout')
     procparam = next(p for p in main['ph'] if p['type'] == 0x61000001)
     with (out / 'boot-linked.bin').open('wb') as f:
-        f.write(struct.pack('<8s6Q', b'G3PROBE5', len(image), entry, len(segments), len(relocs), len(names), flags))
+        f.write(struct.pack('<8s6Q', b'G3PROBE6', len(image), entry, len(segments), len(relocs), len(names), flags))
         f.write(struct.pack('<Q', procparam['vaddr']))
         f.write(struct.pack('<4Q', *main_tls_values))
         f.write(struct.pack('<Q', len(table)))
         for t in table:
             f.write(struct.pack('<7Q', t['base'], t['size'], t['init'], t['tls_address'], t['tls_memsz'],
                                 t['tls_filesz'], t['tls_module']))
+            f.write(struct.pack('<Q', t['flags']) + t['file'].encode().ljust(64, bytes(1)))
         f.write(struct.pack('<Q', len(bindings)))
         for binding in bindings:
             f.write(struct.pack('<3Q', *binding))
@@ -238,7 +278,8 @@ def link(game, out, module_names=DEFAULT_MODULES):
                   main_tls=dict(zip(('vaddr', 'filesz', 'memsz', 'align'), main_tls_values)),
                   unresolved_imports=unresolved)
     (out / 'link.json').write_text(json.dumps(report, indent=2) + '\n')
-    summary = ', '.join(f"{t['file']}@{t['base']:#x}" for t in table)
+    summary = ', '.join(f"{t['file']}@{t['base']:#x}{' (on load)' if t['flags'] & MODULE_DEFERRED else ''}"
+                        for t in table)
     print(f'Linked modules: {summary}; {len(bindings)} native bindings, {len(unresolved)} imports left to the host runtime, '
           f'fs->gs patched={fs_patched}')
 

@@ -7,7 +7,7 @@ the jump also covers the plain next instruction, copied into the stub), INT3
 emulate: segment override, LOCK, 32-bit addressing or F16C).
 
 Usage: isa_rewrite.py out/boot-linked.bin --out out
-Reads the G3PROBE5 image, scans its executable segments and writes
+Reads the G3PROBE5/6 image, scans its executable segments and writes
 <out>/isa-rewrite.bin (format G3ISA1: HEADER, then one RECORD per site).
 """
 import argparse
@@ -130,13 +130,14 @@ def scan_segment(code, address):
 
 
 def read_boot_linked(data):
-    """Segments (address, size, flags) and image of a G3PROBE5 file, in link_modules.py's order."""
+    """Segments (address, size, flags) and image of a G3PROBE5 or G3PROBE6 file, in link_modules.py's
+    order (G3PROBE6 adds each module's flags and file name to its record)."""
     magic, size, entry, ns, nr, ni, flags = unpack('<8s6Q', data, 0)
-    if magic != b'G3PROBE5':
+    if magic not in (b'G3PROBE5', b'G3PROBE6'):
         raise ValueError('not a G3PROBE5 image')
     pos = 56 + 8 + 32   # header, procparam, main TLS
     nmodules, = unpack('<Q', data, pos)
-    pos += 8 + nmodules * 56
+    pos += 8 + nmodules * (128 if magic == b'G3PROBE6' else 56)
     nbindings, = unpack('<Q', data, pos)
     pos += 8 + nbindings * 24
     segments = [unpack('<3Q', data, pos + i * 24) for i in range(ns)]

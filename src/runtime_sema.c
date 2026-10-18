@@ -46,19 +46,23 @@ static uint64_t now_ns(void) {
     if (clock_gettime(WAIT_CLOCK,&t)) { perror("clock_gettime"); exit(1); }
     return (uint64_t)t.tv_sec*1000000000+(uint64_t)t.tv_nsec;
 }
-static ABI int32_t sem_create(uint32_t *out,const char *name,uint32_t attr,
-                              int32_t initial,int32_t maximum,const void *options) {
+/* quiet: POSIX semaphores come and go by the thousand; only kernel ones are logged. */
+static int32_t create(uint32_t *out,const char *name,uint32_t attr,int32_t initial,int32_t maximum,int quiet) {
     if (!out || !name || attr>2 || initial<0 || maximum<=0 || initial>maximum) return ERR(22);
-    if (options) { fputs("STOP: semaphore options are not implemented\n",stderr); exit(21); }
     Sema *s=calloc(1,sizeof(*s));
     if (!s) return ERR(12);
     pthread_mutex_lock(&lock);
     if (next_id==UINT32_MAX) { pthread_mutex_unlock(&lock); free(s); return ERR(28); }
     s->id=next_id++; s->attr=attr; s->count=s->initial=initial; s->maximum=maximum;
     s->next=registry; registry=s; *out=s->id; ++created;
-    printf("Runtime: semaphore id=%u, attr=%u, initial=%d, max=%d\n",s->id,attr,initial,maximum);
+    if (!quiet) printf("Runtime: semaphore id=%u, attr=%u, initial=%d, max=%d\n",s->id,attr,initial,maximum);
     pthread_mutex_unlock(&lock);
     return 0;
+}
+static ABI int32_t sem_create(uint32_t *out,const char *name,uint32_t attr,
+                              int32_t initial,int32_t maximum,const void *options) {
+    if (options) { fputs("STOP: semaphore options are not implemented\n",stderr); exit(21); }
+    return create(out,name,attr,initial,maximum,0);
 }
 static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block) {
     pthread_mutex_lock(&lock);
@@ -176,7 +180,7 @@ static ABI int32_t posix_sem_init(uint64_t *sem,int shared,uint32_t value) {
     (void)shared;
     if (!sem || value>INT32_MAX) return posix_result(ERR(22));
     uint32_t id;
-    int32_t r=sem_create(&id,"posix",1,(int32_t)value,INT32_MAX,NULL);
+    int32_t r=create(&id,"posix",1,(int32_t)value,INT32_MAX,1);
     if (!r) *sem=POSIX_SEM_MAGIC|id;
     return posix_result(r);
 }

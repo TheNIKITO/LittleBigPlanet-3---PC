@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <pthread.h>
 #include "runtime.h"
 #include "cpu_check.h"
 #include "isa_rewrite.h"
@@ -39,7 +40,9 @@ static char (*names)[128];
 static uint64_t import_count;
 static unsigned char *image;
 static size_t page_size;
-typedef struct { uint64_t base, size, init, tls_address, tls_memsz, tls_filesz, tls_module; } LinkedModule;
+/* flags (G3PROBE6): MODULE_DEFERRED starts the module when the game loads it, not at boot. */
+#define MODULE_DEFERRED 1
+typedef struct { uint64_t base, size, init, tls_address, tls_memsz, tls_filesz, tls_module, flags; char name[64]; } LinkedModule;
 static LinkedModule modules[16];
 static uint64_t module_count;
 static int entered_game;
@@ -92,7 +95,8 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
     uintptr_t caller=(uintptr_t)__builtin_return_address(0)-(uintptr_t)image;
     for (uint64_t m=0;m<module_count;++m)
         if (caller>=modules[m].base && caller-modules[m].base<modules[m].size)
-            printf("Caller in linked module %" PRIu64 " (%s): +0x%" PRIxPTR "\n",m,m==0 ? "libc.prx" : "system module",caller-modules[m].base);
+            printf("Caller in linked module %" PRIu64 " (%s): +0x%" PRIxPTR "\n",m,
+                   modules[m].name[0] ? modules[m].name : m==0 ? "libc.prx" : "system module",caller-modules[m].base);
     runtime_report();
     puts(entered_game ? "Original guest entry instructions executed; game initialization is incomplete." :
                         "Native libc initialization is incomplete; game entry has not run.");
@@ -721,6 +725,84 @@ static int cpu_supported(char *missing, size_t size) {
     return 1;
 }
 
+/* GOW3_IMPORT_STATS=1: every imported function is called through a counting thunk, and a host
+ * thread prints the most called ones every 5 seconds (what the game repeats while it waits). */
+static uint64_t *import_calls, *import_callers;
+static unsigned char *import_thunks;
+#define THUNK_SIZE 64
+static uintptr_t count_calls(uint64_t index, uintptr_t target) {
+    unsigned char *t=import_thunks+index*THUNK_SIZE;
+    if (!t[0]) {
+        uint64_t *counter=&import_calls[index], *caller=&import_callers[index];
+        /* mov r11, counter; lock inc qword [r11]; push rax; mov rax, [rsp+8] (the return
+         * address); mov [caller], rax; pop rax; mov r11, target; jmp r11. No argument uses r11. */
+        t[0]=0x49; t[1]=0xbb; memcpy(t+2,&counter,8);
+        t[10]=0xf0; t[11]=0x49; t[12]=0xff; t[13]=0x03;
+        t[14]=0x50;
+        t[15]=0x48; t[16]=0x8b; t[17]=0x44; t[18]=0x24; t[19]=0x08;
+        t[20]=0x48; t[21]=0xa3; memcpy(t+22,&caller,8);
+        t[30]=0x58;
+        t[31]=0x49; t[32]=0xbb; memcpy(t+33,&target,8);
+        t[41]=0x41; t[42]=0xff; t[43]=0xe3;
+    }
+    return (uintptr_t)t;
+}
+static void *report_import_calls(void *unused) {
+    (void)unused;
+    enum { TOP=12 };
+    uint64_t *last=calloc(import_count ? import_count : 1,sizeof(*last));
+    if (!last) return NULL;
+    for (;;) {
+#ifdef _WIN32
+        Sleep(5000);
+#else
+        sleep(5);
+#endif
+        uint64_t top[TOP]={0}, which[TOP]={0};
+        for (uint64_t i=0;i<import_count;++i) {
+            uint64_t now=__atomic_load_n(&import_calls[i],__ATOMIC_RELAXED), delta=now-last[i];
+            if (!last[i] && now) {
+                uintptr_t caller=(uintptr_t)__atomic_load_n(&import_callers[i],__ATOMIC_RELAXED)-(uintptr_t)image;
+                printf("Import first called: %s (%s) from guest offset 0x%" PRIxPTR ", %" PRIu64 " calls\n",
+                       runtime_import_name(names[i]),names[i],caller,now);
+            }
+            last[i]=now;
+            for (int k=0;k<TOP;++k)
+                if (delta>top[k]) {
+                    memmove(top+k+1,top+k,(TOP-1-k)*sizeof(*top));
+                    memmove(which+k+1,which+k,(TOP-1-k)*sizeof(*which));
+                    top[k]=delta; which[k]=i;
+                    break;
+                }
+        }
+        /* GOW3_WATCH=offset:count[:size],...: guest memory printed with the counts (game state). */
+        const char *watch=getenv("GOW3_WATCH");
+        while (watch && *watch) {
+            char *end;
+            uint64_t offset=strtoull(watch,&end,0), count=1, width=4;
+            if (*end==':') count=strtoull(end+1,&end,0);
+            if (*end==':') width=strtoull(end+1,&end,0);
+            if ((width==4 || width==8) && count<=256) {
+                printf("Watch 0x%" PRIx64 ":",offset);
+                for (uint64_t i=0;i<count;++i) {
+                    uint64_t value=0;
+                    memcpy(&value,image+offset+i*width,width);
+                    printf(" %" PRIx64,value);
+                }
+                putchar('\n');
+            }
+            watch=*end==',' ? end+1 : "";
+        }
+        printf("Import calls in the last 5 s:\n");
+        for (int k=0;k<TOP && top[k];++k) {
+            uintptr_t caller=(uintptr_t)__atomic_load_n(&import_callers[which[k]],__ATOMIC_RELAXED)-(uintptr_t)image;
+            printf("  %10" PRIu64 "  %s (%s), last called from guest offset 0x%" PRIxPTR "\n",
+                   top[k],runtime_import_name(names[which[k]]),names[which[k]],caller);
+        }
+    }
+    return NULL;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
 #ifndef _WIN32
@@ -816,6 +898,17 @@ int main(int argc, char **argv) {
         snprintf(sfo,sizeof(sfo),"%s/sce_sys/param.sfo",app0);
         if (sfo_value(sfo,"INSTALL_DIR_SAVEDATA",id,sizeof(id),NULL) || sfo_value(sfo,"TITLE_ID",id,sizeof(id),NULL))
             runtime_savedata_configure(id);
+        /* The mouse lock (relative mode, hidden cursor) is God of War III's mouse aim: other titles
+         * leave the mouse free unless GOW3_MOUSE_LOCK asks otherwise. */
+        char serial[16]="";
+        sfo_value(sfo,"TITLE_ID",serial,sizeof(serial),NULL);
+        if (strcmp(serial,"CUSA01623") && strcmp(serial,"CUSA01715") && strcmp(serial,"CUSA01720") && !getenv("GOW3_MOUSE_LOCK")) {
+#ifdef _WIN32
+            _putenv_s("GOW3_MOUSE_LOCK","0");
+#else
+            setenv("GOW3_MOUSE_LOCK","0",0);
+#endif
+        }
     }
     gow3gpu_register_kernel();
 #ifdef _WIN32
@@ -847,7 +940,7 @@ int main(int argc, char **argv) {
     FILE *f = fopen(argv[1], "rb");
     if (!f) fail("cannot open boot file; run prepare.py first");
     char magic[8];
-    if (fread(magic, 1, 8, f) != 8 || (memcmp(magic, "G3PROBE1", 8) && memcmp(magic, "G3PROBE2", 8) && memcmp(magic,"G3PROBE3",8) && memcmp(magic,"G3PROBE4",8) && memcmp(magic,"G3PROBE5",8))) fail("bad boot file signature");
+    if (fread(magic, 1, 8, f) != 8 || (memcmp(magic, "G3PROBE1", 8) && memcmp(magic, "G3PROBE2", 8) && memcmp(magic,"G3PROBE3",8) && memcmp(magic,"G3PROBE4",8) && memcmp(magic,"G3PROBE5",8) && memcmp(magic,"G3PROBE6",8))) fail("bad boot file signature");
     uint64_t size = read64(f), entry = read64(f), ns = read64(f), nr = read64(f);
     import_count = read64(f);
     uint64_t capabilities = memcmp(magic, "G3PROBE1", 8) ? read64(f) : 0;
@@ -855,7 +948,7 @@ int main(int argc, char **argv) {
     runtime_start(strict_imports ? 0 : capabilities);
     if (!size || size > 512*1024*1024 || entry >= size || !ns || ns > 64 || nr > 1000000 || import_count > 100000)
         fail("boot file limits exceeded");
-    int multi=!memcmp(magic,"G3PROBE5",8);
+    int named=!memcmp(magic,"G3PROBE6",8), multi=!memcmp(magic,"G3PROBE5",8) || named;
     int linked=!memcmp(magic,"G3PROBE3",8) || !memcmp(magic,"G3PROBE4",8) || multi;
     int native_libc=linked && !strict_imports && (capabilities&1);
     uint64_t main_tls[4]={0};
@@ -864,7 +957,8 @@ int main(int argc, char **argv) {
     uint64_t *binding_kinds=calloc(import_count ? import_count : 1,sizeof(*binding_kinds));
     if (!bindings || !binding_kinds) fail("allocation failed");
     if (multi) {
-        /* G3PROBE5: procparam, eboot TLS, module table, bindings (link_modules.py). */
+        /* G3PROBE5: procparam, eboot TLS, module table, bindings (link_modules.py). G3PROBE6
+         * adds each module's flags and file name. */
         procparam=read64(f);
         for (int i=0;i<4;++i) main_tls[i]=read64(f);
         module_count=read64(f);
@@ -873,6 +967,11 @@ int main(int argc, char **argv) {
             LinkedModule *x=&modules[m];
             x->base=read64(f); x->size=read64(f); x->init=read64(f); x->tls_address=read64(f);
             x->tls_memsz=read64(f); x->tls_filesz=read64(f); x->tls_module=read64(f);
+            if (named) {
+                x->flags=read64(f);
+                if (fread(x->name,1,sizeof(x->name),f)!=sizeof(x->name) || !memchr(x->name,0,sizeof(x->name)) ||
+                    (x->flags & ~(uint64_t)MODULE_DEFERRED)) fail("invalid linked module name or flags");
+            }
         }
         nb=read64(f);
     } else if (linked) {
@@ -985,6 +1084,12 @@ int main(int argc, char **argv) {
         t[8] = 0x48; t[9] = 0xb8; memcpy(t + 10, &handler, 8);
         t[18] = 0xff; t[19] = 0xe0;
     }
+    if (getenv("GOW3_IMPORT_STATS") && !check_imports) {
+        import_calls = calloc(import_count ? import_count : 1, sizeof(*import_calls));
+        import_callers = calloc(import_count ? import_count : 1, sizeof(*import_callers));
+        import_thunks = allocate(round_page((import_count + 1) * THUNK_SIZE));
+        if (!import_calls || !import_callers) fail("allocation failed");
+    }
     for (uint64_t i = 0; i < nr; ++i) {
         uintptr_t value = relocs[i].kind == 2 ? (uintptr_t)(data_traps + page_size * relocs[i].value + relocs[i].addend)
                         : relocs[i].kind == 1 ? (uintptr_t)(traps + 32 * relocs[i].value)
@@ -997,6 +1102,8 @@ int main(int argc, char **argv) {
                 if (binding_kinds[relocs[i].value]!=relocs[i].kind || !mapped(segments,ns,address,relocs[i].addend+1)) fail("native export kind/range mismatch");
                 value=(uintptr_t)image+address+relocs[i].addend;
             }
+            if (import_calls && relocs[i].kind == 1 && value != (uintptr_t)(traps + 32 * relocs[i].value))
+                value = count_calls(relocs[i].value, value);
         }
         memcpy(image + relocs[i].target, &value, 8);
     }
@@ -1045,6 +1152,12 @@ int main(int argc, char **argv) {
         protect(stubs, stub_area, 5);
     }
     protect(traps, round_page((import_count + 1) * 32), 5);
+    if (import_thunks) {
+        protect(import_thunks, round_page((import_count + 1) * THUNK_SIZE), 5);
+        pthread_t reporter;
+        if (!pthread_create(&reporter, NULL, report_import_calls, NULL)) pthread_detach(reporter);
+        puts("Import call counting on (GOW3_IMPORT_STATS): top calls every 5 s");
+    }
     protect(image, round_page(size), 0);
     int executable_entry = 0;
     for (uint64_t i = 0; i < ns; ++i) {
@@ -1067,8 +1180,14 @@ int main(int argc, char **argv) {
         runtime_set_main_tls(image+main_tls[0],main_tls[1],main_tls[2],main_tls[3]);
         runtime_thread_attach_main();
         runtime_set_procparam(image+procparam);
-        /* Dependencies start in link order (libc first), as the PS4 dynamic linker does. */
+        /* Dependencies start in link order (libc first), as the PS4 dynamic linker does. The
+         * game's own modules start when it loads them (runtime_module.c). */
         for (uint64_t m=0;m<module_count;++m) {
+            if (modules[m].flags & MODULE_DEFERRED) {
+                runtime_module_add(modules[m].name,image+modules[m].init);
+                printf("Linked module %" PRIu64 " (%s) starts when the game loads it\n",m,modules[m].name);
+                continue;
+            }
             printf("Starting linked module %" PRIu64 " at image offset 0x%" PRIx64 "; native bindings=%" PRIu64 "\n",m,modules[m].init,nb);
             typedef int (ABI *ModuleInit)(uint64_t,void *,void *);
             int result=((ModuleInit)(image+modules[m].init))(0,NULL,NULL);

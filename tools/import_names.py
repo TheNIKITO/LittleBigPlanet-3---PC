@@ -21,14 +21,14 @@ LINE = re.compile(r'^\{"([A-Za-z0-9+-]{11}#\w+)","([^"]+)"\},$')
 
 
 def linked_imports(path):
-    """Import names (NID#library) of a G3PROBE5 image, in table order."""
+    """Import names (NID#library) of a G3PROBE5/6 image, in table order."""
     data = Path(path).read_bytes()
     magic, size, entry, ns, nr, ni, flags = struct.unpack_from('<8s6Q', data, 0)
-    if magic != b'G3PROBE5':
-        raise ValueError(f'{path}: expected a G3PROBE5 image from link_modules.py')
+    if magic not in (b'G3PROBE5', b'G3PROBE6'):
+        raise ValueError(f'{path}: expected a G3PROBE5/6 image from link_modules.py')
     pos = 56 + 8 + 32
     modules, = struct.unpack_from('<Q', data, pos)
-    pos += 8 + modules * 56
+    pos += 8 + modules * (128 if magic == b'G3PROBE6' else 56)
     bindings, = struct.unpack_from('<Q', data, pos)
     pos += 8 + bindings * 24 + ns * 24
     return [data[pos + i * 128:pos + (i + 1) * 128].split(b'\0', 1)[0].decode() for i in range(ni)]

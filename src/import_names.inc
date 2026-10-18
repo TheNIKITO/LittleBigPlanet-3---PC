@@ -956,3 +956,4 @@
 {"gQX+4GDQjpM#libSceLibcInternal","malloc"},
 {"tIhsqj0qsFE#libSceLibcInternal","free"},
 {"2sWzhYqFH4E#libSceLibcInternal","_Stdout"},
+{"H2e8t5ScQGc#libc","__cxa_finalize"},

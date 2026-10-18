@@ -1,21 +1,9 @@
 {
   "measured": "2026-10-18",
   "imports": {
-    "total": 634,
-    "answered": 623,
-    "missing": [
-      "libSceFiber: sceFiberRun",
-      "libSceFiber: sceFiberFinalize",
-      "libSceFiber: sceFiberOptParamInitialize",
-      "libSceFiber: _sceFiberInitializeImpl",
-      "libSceFiber: sceFiberReturnToThread",
-      "libkernel: sceKernelLoadStartModule",
-      "spu (módulo do próprio jogo)",
-      "FMODSmsWaveHammer (módulo do próprio jogo)",
-      "FMODSmsReverb (módulo do próprio jogo)",
-      "FMODExtInput (módulo do próprio jogo)",
-      "FMODVoIPMixer (módulo do próprio jogo)"
-    ]
+    "total": 636,
+    "answered": 636,
+    "missing": []
   },
   "milestones": [
     {
@@ -31,12 +19,12 @@
     {
       "pt": "Módulos próprios do jogo carregam (spu.prx, plugins FMOD)",
       "en": "game modules load",
-      "done": false
+      "done": true
     },
     {
       "pt": "Primeiro frame na tela",
       "en": "first frame",
-      "done": false
+      "done": true
     },
     {
       "pt": "Menu principal",
@@ -59,5 +47,5 @@
       "done": false
     }
   ],
-  "next_en": "Next: loading the game's own modules (spu.prx, FMOD plugins), libSceFiber, first frame. No release yet. Needs your own copy of the game; none is included. Fork of gow3_pc."
+  "next_en": "Next: the \"Connecting to LittleBigPlanet 3 Online\" screen waits for a network task that never ends offline; an intermittent crash in the first seconds. No release yet. Needs your own copy of the game; none is included. Fork of gow3_pc."
 }

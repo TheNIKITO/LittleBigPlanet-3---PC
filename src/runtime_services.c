@@ -127,9 +127,43 @@ static ABI const char *net_ntop(int af,const void *src,char *dst,uint32_t size) 
 }
 static ABI int32_t netctl_state(int32_t *state) { if (!state) return NET_CTL_INVALID_ADDR; *state=0; return 0; }
 static ABI int32_t netctl_info(int code,void *info) { (void)code; (void)info; return NET_CTL_NOT_CONNECTED; }
-static ABI int32_t netctl_register(void *cb,void *arg,int32_t *cid) { (void)cb; (void)arg; if (!cid) return NET_CTL_INVALID_ADDR; *cid=new_id(); return 0; }
-static ABI int32_t netctl_check(void) { return 0; }
-static ABI int32_t netctl_unregister(int cid) { (void)cid; return 0; }
+/* Callbacks hear "disconnected" on every check, as the console says while the cable is out:
+ * a game waiting for its network state (LittleBigPlanet 3's "Connecting..." screen) learns it. */
+#define NET_CTL_CALLBACKS 8
+#define NET_CTL_EVENT_DISCONNECTED 1
+#define NET_CTL_CALLBACK_MAX ((int32_t)0x80412109)
+typedef void (ABI *NetCtlCallback)(int32_t event,void *arg);
+static struct { NetCtlCallback function; void *arg; } netctl_callbacks[NET_CTL_CALLBACKS];
+static ABI int32_t netctl_register(NetCtlCallback cb,void *arg,int32_t *cid) {
+    if (!cb || !cid) return NET_CTL_INVALID_ADDR;
+    pthread_mutex_lock(&lock);
+    int i=0;
+    while (i<NET_CTL_CALLBACKS && netctl_callbacks[i].function) ++i;
+    if (i<NET_CTL_CALLBACKS) { netctl_callbacks[i].function=cb; netctl_callbacks[i].arg=arg; }
+    pthread_mutex_unlock(&lock);
+    if (i==NET_CTL_CALLBACKS) return NET_CTL_CALLBACK_MAX;
+    *cid=i; return 0;
+}
+static ABI int32_t netctl_check(void) {
+    static int said;
+    for (int i=0;i<NET_CTL_CALLBACKS;++i) {
+        pthread_mutex_lock(&lock);
+        NetCtlCallback cb=netctl_callbacks[i].function;
+        void *arg=netctl_callbacks[i].arg;
+        pthread_mutex_unlock(&lock);
+        if (!cb) continue;
+        if (!said) { said=1; note("NetCtl: callbacks told the network is disconnected"); }
+        cb(NET_CTL_EVENT_DISCONNECTED,arg);
+    }
+    return 0;
+}
+static ABI int32_t netctl_unregister(int cid) {
+    if (cid<0 || cid>=NET_CTL_CALLBACKS) return NET_CTL_INVALID_ADDR;
+    pthread_mutex_lock(&lock);
+    netctl_callbacks[cid].function=NULL; netctl_callbacks[cid].arg=NULL;
+    pthread_mutex_unlock(&lock);
+    return 0;
+}
 static ABI int32_t netctl_nat(uint32_t *info) {
     if (!info) return NET_CTL_INVALID_ADDR;
     info[1]=0; info[2]=3; info[3]=0; /* stun failed, NAT type 3, no mapped address */

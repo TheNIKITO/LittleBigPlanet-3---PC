@@ -215,13 +215,15 @@ bool WindowSDL::PollEvents() {
     // another window or the game's pause menu (the pause key) get it back. Taken back, it starts
     // at the window's centre; let go by the pause key, the system cursor shows.
     const bool paused = mouse_paused.load(std::memory_order_relaxed);
-    const bool lock = Gow3Settings::Get().mouse_lock.load(std::memory_order_relaxed) && !text_active && !paused &&
+    const bool lock_wanted = Gow3Settings::Get().mouse_lock.load(std::memory_order_relaxed);
+    const bool lock = lock_wanted && !text_active && !paused &&
                       !Gow3Overlay::CapturesInput() && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS);
     if (lock != mouse_locked) {
         if (lock) SDL_WarpMouseInWindow(window, width / 2.0f, height / 2.0f);
         if (SDL_SetWindowRelativeMouseMode(window, lock)) mouse_locked = lock;
     }
-    if (const bool show = paused && !mouse_locked; show != cursor_shown) {
+    // Without the lock (games that do not aim with the mouse) the system cursor stays visible.
+    if (const bool show = (paused || !lock_wanted) && !mouse_locked; show != cursor_shown) {
         show ? SDL_ShowCursor() : SDL_HideCursor();
         cursor_shown = show;
     }

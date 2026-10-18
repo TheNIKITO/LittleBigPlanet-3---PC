@@ -150,7 +150,9 @@ static ABI __attribute__((noreturn)) void hard_exit(int status) {
     _exit(status);
 }
 static ABI __attribute__((noreturn)) void raise_exception(uint32_t code,uint64_t argument) {
-    fprintf(stderr,"STOP: guest raised debug exception code=0x%x argument=0x%llx\n",code,(unsigned long long)argument);
+    /* Called by the game's assertion handler: its return address leads to the failed check. */
+    fprintf(stderr,"STOP: guest raised debug exception code=0x%x argument=0x%llx, called from %p\n",code,
+            (unsigned long long)argument,__builtin_return_address(0));
     runtime_report();
     exit(23);
 }

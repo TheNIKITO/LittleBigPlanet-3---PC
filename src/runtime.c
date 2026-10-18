@@ -77,6 +77,7 @@ void runtime_report(void) {
     runtime_rwlock_report();
     runtime_sema_report();
     runtime_evf_report();
+    runtime_fiber_report();
     runtime_content_report();
     runtime_memory_report();
     runtime_ajm_report();
@@ -234,6 +235,10 @@ uintptr_t runtime_resolve(const char *name, int is_data) {
     if (sema) return sema;
     uintptr_t evf = runtime_evf_resolve(name);
     if (evf) return evf;
+    uintptr_t loader = runtime_module_resolve(name);
+    if (loader) return loader;
+    uintptr_t fiber = runtime_fiber_resolve(name);
+    if (fiber) return fiber;
     uintptr_t rwlock = runtime_rwlock_resolve(name);
     if (rwlock) return rwlock;
     uintptr_t memory = runtime_memory_resolve(name);

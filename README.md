@@ -13,38 +13,24 @@ caminho do [Hotline Miami 2 — PC](https://github.com/TheNIKITO/Hotline-Miami-2
 ## Estado do projeto
 
 <!-- status:begin -->
-![decompilação: não se aplica](https://img.shields.io/badge/decompila%C3%A7%C3%A3o-n%C3%A3o%20se%20aplica-lightgrey) ![executável: 98%](https://img.shields.io/badge/execut%C3%A1vel-98%25-brightgreen) ![jogo: 25%](https://img.shields.io/badge/jogo-25%25-red)
+![decompilação: não se aplica](https://img.shields.io/badge/decompila%C3%A7%C3%A3o-n%C3%A3o%20se%20aplica-lightgrey) ![executável: 100%](https://img.shields.io/badge/execut%C3%A1vel-100%25-brightgreen) ![jogo: 50%](https://img.shields.io/badge/jogo-50%25-orange)
 
 | Parte | Progresso | O que o número mede |
 | --- | --- | --- |
 | Decompilação | não se aplica | O executável original roda direto no processador (o PS4 é x86-64): nada precisa ser decompilado. |
-| Executável | `█████████░` **98%** | 623 de 634 funções do sistema que o `eboot.bin` e seus módulos chamam já têm resposta no port (serviços online, câmera e PS Move respondem como ausentes). |
-| Jogo | `██░░░░░░░░` **25%** | 2 de 8 marcos da lista abaixo. |
+| Executável | `██████████` **100%** | 636 de 636 funções do sistema que o `eboot.bin` e seus módulos chamam já têm resposta no port (serviços online, câmera e PS Move respondem como ausentes). |
+| Jogo | `█████░░░░░` **50%** | 4 de 8 marcos da lista abaixo. |
 
 Marcos do jogo:
 
 - [x] O executável abre e roda nativamente
 - [x] O motor inicializa (threads, memória, leitura dos .farc)
-- [ ] Módulos próprios do jogo carregam (spu.prx, plugins FMOD)
-- [ ] Primeiro frame na tela
+- [x] Módulos próprios do jogo carregam (spu.prx, plugins FMOD)
+- [x] Primeiro frame na tela
 - [ ] Menu principal
 - [ ] Uma fase jogável
 - [ ] Áudio (FMOD)
 - [ ] Saves
-
-Funções que o jogo chama e o port ainda não responde:
-
-- `libSceFiber: sceFiberRun`
-- `libSceFiber: sceFiberFinalize`
-- `libSceFiber: sceFiberOptParamInitialize`
-- `libSceFiber: _sceFiberInitializeImpl`
-- `libSceFiber: sceFiberReturnToThread`
-- `libkernel: sceKernelLoadStartModule`
-- `spu (módulo do próprio jogo)`
-- `FMODSmsWaveHammer (módulo do próprio jogo)`
-- `FMODSmsReverb (módulo do próprio jogo)`
-- `FMODExtInput (módulo do próprio jogo)`
-- `FMODVoIPMixer (módulo do próprio jogo)`
 
 _Números medidos em 2026-10-18 (`python tools/lbp3_status.py`)._
 <!-- status:end -->
@@ -68,16 +54,19 @@ Para conferir a sua cópia, rode no PowerShell, dentro da pasta do jogo:
 
 ## Onde o jogo está agora
 
-Ao abrir, o jogo roda o próprio código de inicialização: cria 27 threads (streaming, HTTP, fontes,
-"main fast/slow thread"…), reserva cerca de 3,7 GB de memória, lê 111 MB dos arquivos `.farc`,
-manda comandos para a GPU e abre uma porta de áudio. Ele para quando tenta carregar os módulos
-que vêm com ele (`gamedata_orbis/spu/spu.prx` e quatro plugins do FMOD), porque o carregamento de
-módulos durante o jogo ainda não existe.
+O jogo abre, carrega os módulos que vêm com ele (`gamedata_orbis/spu/spu.prx` e quatro plugins do
+FMOD), reconhece o controle e **desenha a primeira tela**: o carregamento "Connecting to
+LittleBigPlanet™3 Online…", com a arte e as fontes certas.
+
+Ele não passa dessa tela. O gerenciador de rede do jogo tem 24 tarefas, e a tela fica enquanto
+alguma estiver "em andamento"; sem rede e fora da PSN, uma delas (e a que depende dela) nunca
+termina. Também há uma queda intermitente nos primeiros segundos, em mais ou menos metade das
+aberturas.
 
 Próximos passos:
-1. Carregar os módulos próprios do jogo (`sceKernelLoadStartModule`).
-2. Fibers (`libSceFiber`), que o motor do LittleBigPlanet usa.
-3. Primeiro frame na tela, depois menu, áudio do FMOD e saves.
+1. Descobrir o que a tarefa de rede presa espera e responder como um PS4 offline responderia.
+2. Achar a queda intermitente do começo.
+3. Menu principal, áudio do FMOD e saves.
 
 Ainda não há pacote pronto nem launcher próprio: por enquanto o jogo só roda a partir do código.
 
@@ -115,13 +104,18 @@ Para listar as funções do sistema que o jogo chama e que o port ainda não res
 
 | Arquivo | Para quê |
 | --- | --- |
+| `scripts/link_modules.py` | Também linka os módulos próprios do jogo que o eboot declara como dependência (achados pelo nome do módulo), marcados para iniciar quando o jogo os carrega; formato G3PROBE6, com o nome de cada módulo |
+| `src/runtime_module.c` | `sceKernelLoadStartModule`: acha o módulo já linkado pelo nome do arquivo e roda o início dele com os argumentos do jogo |
+| `src/runtime_fiber.c` | Fibers (`libSceFiber`) sobre fibers do Windows (ucontext no Linux) |
 | `src/runtime_evf.c` | Event flags do kernel (`sceKernel*EventFlag`), usados para sincronizar as threads do motor |
 | `src/runtime_sema.c` | Semáforos POSIX (`sem_init`, `sem_wait`, `sem_timedwait`…) sobre os semáforos do kernel |
 | `src/runtime_thread.c` | Prioridade de threads (`scePthreadGet/Setschedparam`) e `scePthreadAttrSetstack` |
 | `src/runtime_content.c` | Dados temporários em `/temp0` e chave de DLC (nenhum DLC instalado) |
-| `src/runtime_services.c` | Respostas "offline/ausente" para câmera, PS Move, transmissão ao vivo, app companheiro, HTTP, PSN, sockets POSIX, JPEG e diálogo de erro; cada uma avisa no log quando o jogo a usa |
+| `src/runtime_services.c` | Respostas "offline/ausente" para câmera, PS Move, transmissão ao vivo, app companheiro, HTTP, PSN, sockets POSIX, JPEG e diálogo de erro; cada uma avisa no log quando o jogo a usa. Os callbacks de rede (NetCtl) ouvem "desconectado" a cada verificação, como no console sem cabo |
 | `src/import_names.inc` | Nomes das funções que o LittleBigPlanet 3 importa |
-| `src/probe.c`, `run.py` | Os hooks e as cópias de arquivos do God of War III só entram para o God of War III |
+| `src/probe.c`, `run.py`, `gpu/shim/window.cpp` | Os hooks, as cópias de arquivos e a captura do mouse do God of War III só entram para o God of War III: nos outros jogos o cursor fica livre e visível |
+| `src/probe.c` (diagnóstico) | `GOW3_IMPORT_STATS=1` conta as chamadas de cada função do sistema e mostra, a cada 5 s, as mais chamadas (com quem chamou) e as chamadas pela primeira vez; `GOW3_WATCH=offset:quantidade[:tamanho]` imprime memória do jogo junto |
+| `tools/disasm.py` | Desmonta um trecho do jogo pelo offset que o loader mostra, com as funções do PS4 chamadas nomeadas (usa o `llvm-objdump` do CLANG64) |
 | `scripts/link_libc.py` | Aceita o `libc.prx` do LittleBigPlanet 3 (outra versão, com um símbolo sem NID) |
 | `tools/import_names.py` | Dá nome às importações de um jogo a partir da lista pública do shadPS4 (`aerolib.inl`) |
 | `tools/lbp3_status.py`, `docs/lbp3/status.json` | O estado do projeto acima e no `.recomp.json` |

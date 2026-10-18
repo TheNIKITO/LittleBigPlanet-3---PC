@@ -23,8 +23,8 @@
     }
   ],
   "help": [
-    "Fibers (libSceFiber)",
-    "Loading the game's own modules (spu.prx, FMOD plugins)",
+    "Offline network state (stuck on the \"Connecting...\" screen)",
+    "Intermittent crash at startup",
     "FMOD audio"
   ],
   "tags": [
@@ -33,10 +33,10 @@
     "native-port",
     "windows"
   ],
-  "notes": "Executable: 98% (623 of 634 imported PS4 system functions answered by the port). Game: 25% (2 of 8 milestones: boots natively, engine initializes). Next: loading the game's own modules (spu.prx, FMOD plugins), libSceFiber, first frame. No release yet. Needs your own copy of the game; none is included. Fork of gow3_pc.",
+  "notes": "Executable: 100% (636 of 636 imported PS4 system functions answered by the port). Game: 50% (4 of 8 milestones: boots natively, engine initializes, game modules load, first frame). Next: the \"Connecting to LittleBigPlanet 3 Online\" screen waits for a network task that never ends offline; an intermittent crash in the first seconds. No release yet. Needs your own copy of the game; none is included. Fork of gow3_pc.",
   "x-progress": {
     "decompilation": "not applicable",
-    "executable": 98,
-    "game": 25
+    "executable": 100,
+    "game": 50
   }
 }
